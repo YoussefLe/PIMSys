@@ -5,48 +5,57 @@ extern crate alloc;
 
 use aarch64_cpu::asm::barrier;
 use alloc::boxed::Box;
-use core::fmt::Write;
 use half::f16;
 use nalgebra::SVector;
-use pim_isa::BankMode;
-use pim_os::{
-    kernel::vadd,
-    pim::{self, vector::F16x1},
-    uart::Uart0,
-};
+use pim_os::{kernel::spmv, pim::vector::F16x1};
+use pim_isa::BankMode; // <-- La correction est ici !
 
-const ROWS: usize = 256;
-const ELEMENTS_PER_BANK: usize = 16;
-const BANKS: usize = 16;
-const BLOCKS: usize = ROWS / (ELEMENTS_PER_BANK * BANKS);
+const ROWS: usize = 2048;
+const COLS: usize = 2048;
+const NNZ: usize = 8192;
+const ROW_PTR_SIZE: usize = ROWS + 1;
+const BLOCKS: usize = 8;
 
 #[no_mangle]
 pub extern "C" fn main() {
-    pim::state::set_kernel(&vadd::KERNEL);
+    pim_os::pim::state::set_kernel(&spmv::KERNEL);
 
-    let a = Box::new(pim::continuous_array::Vector(
-        SVector::<F16x1, ROWS>::from_fn(|i, _| F16x1(f16::from_f32(i as _))),
-    ));
-    let b = Box::new(pim::continuous_array::Vector(
-        SVector::<F16x1, ROWS>::from_fn(|i, _| F16x1(f16::from_f32((ROWS - i) as _))),
-    ));
+    let mut values = Box::new(SVector::<F16x1, NNZ>::zeros());
+    let mut col_indices = Box::new(SVector::<F16x1, NNZ>::zeros());
+    let mut row_ptrs = Box::new(SVector::<F16x1, ROW_PTR_SIZE>::zeros());
+    let mut x = Box::new(SVector::<F16x1, COLS>::zeros());
+    let mut y = Box::new(SVector::<F16x1, ROWS>::zeros());
 
-    writeln!(Uart0, "{}+{}=", a.0, b.0).unwrap();
+    for i in 0..ROWS {
+        row_ptrs[i] = F16x1(f16::from_f32((i * 4) as f32));
+        for k in 0..4 {
+            let idx = i * 4 + k;
+            values[idx] = F16x1(f16::from_f32(1.5));
+            col_indices[idx] = F16x1(f16::from_f32(((i + k) % COLS) as f32));
+        }
+        x[i] = F16x1(f16::from_f32(i as f32));
+    }
+    row_ptrs[ROWS] = F16x1(f16::from_f32(NNZ as f32));
 
-    let mut c = Box::new(pim::continuous_array::Vector(
-        SVector::<F16x1, ROWS>::zeros(),
-    ));
-
-    let dummy = Box::new(0);
-
-    // Verify everything is correctly initialized before PIM operation
     barrier::dsb(barrier::SY);
 
-    // Execute kernel
-    pim::state::set_bank_mode(BankMode::PimAllBank);
-    vadd::execute::<ROWS, BLOCKS>(&a.0, &b.0, &mut c.0, dummy.as_ref());
-    pim::state::set_bank_mode(BankMode::SingleBank);
+    pim_os::pim::state::set_bank_mode(BankMode::PimAllBank);
 
-    writeln!(Uart0, "{}", c.0).unwrap();
-    writeln!(Uart0, "Done").unwrap();
+    let dummy = F16x1(f16::from_f32(0.0));
+    
+    spmv::execute::<NNZ, ROWS, COLS, ROW_PTR_SIZE, BLOCKS>(
+        &values,
+        &col_indices,
+        &row_ptrs,
+        &x,
+        &mut y,
+        &dummy
+    );
+
+    barrier::dsb(barrier::SY);
+    pim_os::pim::state::set_bank_mode(BankMode::SingleBank);
+
+    loop {
+        aarch64_cpu::asm::wfi();
+    }
 }
