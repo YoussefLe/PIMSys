@@ -18,11 +18,23 @@ The ARM CPU acts entirely as a control-plane orchestrator. During the PIM offloa
 * **NNZ-Based Load Balancing (`partition_csr`):** Standard geometric row-splitting leads to severe load imbalance ("hot banks") due to the irregular dispersion inherent to sparse matrices. To prevent this, the firmware dynamically divides the Compressed Sparse Row (CSR) matrix into 32 equal-weight computational blocks based strictly on the Number of Non-Zeros (NNZ). This algorithm guarantees symmetric traffic and utilization across all 32 independent HBM2 banks.
 * **Deep Sleep Orchestration (`wfi`):** After dispatching the memory-mapped offloading triggers to the HBM2 controller, the ARM core issues a Wait-For-Interrupt (`wfi`) assembly instruction. This completely suspends the processor's clock, drastically reducing the SoC's energy footprint while the memory autonomously processes the sparse matrix.
 
-## 3. Repository Structure
+## 3. Source Tree & File Architecture
 
-* `src/bin/vadd.rs`: The primary executable orchestrating the PIM-accelerated SpMV calculation.
-* `src/bin/baseline.rs`: The control executable (No PIM) where the ARM CPU performs a standard sequential SpMV. This is utilized strictly to benchmark and demonstrate the CPU memory bottleneck.
-* `src/kernel/`: Contains the microcode payloads and hardware instructions injected into the HBM2 memory arrays.
+The repository is structured as a standard Rust Cargo package tailored for bare-metal ARMv8 cross-compilation. Below is the detailed file hierarchy and the specific role of each component:
+
+    PIMSys/
+    ├── Cargo.toml                # Rust package manifest defining metadata and `#![no_std]` dependencies
+    ├── .cargo/
+    │   └── config.toml           # Linker configurations forcing the `aarch64-unknown-none` bare-metal target
+    └── src/
+        ├── kernel/
+        │   ├── mod.rs            # Kernel module declarations and hardware interface definitions
+        │   └── spmv.rs           # The VLIW microcode payload (MAC instructions + NOP padding for 32-byte cache alignment)
+        ├── bin/
+        │   ├── vadd.rs           # The PIM-accelerated orchestrator (NNZ load balancing, offloading, and `wfi` sleep)
+        │   ├── baseline.rs       # The CPU-only sequential execution script used to benchmark the "Memory Wall"
+        │   └── dataset.rs        # Static Rust module containing the CSR matrix arrays (row pointers, indices, values)
+        └── main.rs               # Boot sequence hooks, panic handlers, and global memory allocators for the bare-metal environment
 
 ## 4. Binary Cross-Compilation
 
