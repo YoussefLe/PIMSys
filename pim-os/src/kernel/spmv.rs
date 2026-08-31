@@ -48,3 +48,43 @@ pub fn execute<
 
     dummy.execute_read();
 }
+
+// new update spmv du 29/8/26
+
+pub fn execute_bank<
+    const NNZ: usize,
+    const ROWS: usize,
+    const COLS: usize,
+    const ROW_PTR_SIZE: usize,
+>(
+    values: &SVector<F16x1, NNZ>,
+    col_indices: &SVector<F16x1, NNZ>, 
+    row_ptrs: &SVector<F16x1, ROW_PTR_SIZE>,
+    x: &SVector<F16x1, COLS>,
+    y: &mut SVector<F16x1, ROWS>,
+    start_row: usize,
+    end_row: usize,
+    start_nnz: usize,
+    end_nnz: usize,
+    dummy: &impl PimOperand,
+) {
+    // Le CPU déclenche les transactions TLM (read/write) uniquement 
+    // pour la sous-matrice assignée à cette banque spécifique.
+    for i in start_nnz..end_nnz {
+        values[i].execute_read();
+        col_indices[i].execute_read();
+        // Dans une vraie architecture multi-banque, X est diffusé, 
+        // nous simulons ici son accès par la banque.
+        let col = col_indices[i].0.to_f32() as usize;
+        if col < COLS {
+            x[col].execute_read();
+        }
+    }
+
+    for i in start_row..end_row {
+        row_ptrs[i].execute_read();
+        y[i].execute_write();
+    }
+
+    dummy.execute_read();
+}
